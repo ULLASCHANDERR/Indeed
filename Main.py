@@ -67,6 +67,15 @@ def setup_chrome_driver():
             print(f"Failed to initialize Chrome driver automatically: {e2}")
             raise
 
+def wait_for_page_load(driver, wait, timeout=10):
+    """Wait for page to be fully loaded"""
+    try:
+        wait.until(lambda driver: driver.execute_script("return document.readyState") == "complete")
+        return True
+    except TimeoutException:
+        print("Page load timeout")
+        return False
+
 def find_and_click_element(driver, wait, selectors, description):
     """Find an element and click it immediately"""
     for selector_type, selector_value in selectors:
@@ -102,12 +111,24 @@ def pause_video_with_space(driver):
         print(f"Error sending SPACE key: {e}")
         return False
 
+def wait_for_video_state_change(driver, wait, timeout=5):
+    """Wait for video state to change (play/pause)"""
+    try:
+        # Wait a short time for video state to change
+        time.sleep(1)  # Minimal sleep for video state change
+        return True
+    except Exception as e:
+        print(f"Error waiting for video state change: {e}")
+        return False
+
 def part1_sign_in(driver, wait):
     """Part 1: Sign in to the Platform"""
     print("PART 1: SIGN IN TO THE PLATFORM")
     
     driver.get("https://indeedemo-fyc.watch.indee.tv/")
-    time.sleep(5)
+    
+    # Wait for page to load completely
+    wait_for_page_load(driver, wait)
     
     # Find and fill PIN input
     pin_selectors = [
@@ -120,7 +141,9 @@ def part1_sign_in(driver, wait):
     pin_input = find_element_with_multiple_selectors(driver, wait, pin_selectors, "PIN input field")
     pin_input.clear()
     pin_input.send_keys("WVMVHWBS")
-    time.sleep(2)
+    
+    # Wait for input to be processed
+    wait.until(lambda driver: pin_input.get_attribute("value") == "WVMVHWBS")
     
     # Try to click submit button
     submit_selectors = [
@@ -132,19 +155,22 @@ def part1_sign_in(driver, wait):
     ]
     
     if find_and_click_element(driver, wait, submit_selectors, "submit button"):
+        print("Login button clicked")
+        # Wait for navigation after login
+        wait.until(lambda driver: "login" not in driver.current_url.lower() or 
+                  EC.presence_of_element_located((By.CSS_SELECTOR, ".brand-card")))
         print("Login successful")
     else:
         print("Could not find or click submit button")
         return False
     
-    time.sleep(5)
     return True
 
 def part2_navigate_to_project(driver, wait):
     """Part 2: Navigate to the 'Test Automation Project'"""
     print("PART 2: NAVIGATE TO THE 'TEST AUTOMATION PROJECT'")
     
-    # Click on the first brand card
+    # Wait for brand cards to be present
     brand_selectors = [
         (By.CSS_SELECTOR, ".brand-card"),
         (By.XPATH, "//button[contains(@class, 'brand-card')]"),
@@ -154,13 +180,13 @@ def part2_navigate_to_project(driver, wait):
     
     if find_and_click_element(driver, wait, brand_selectors, "first brand card"):
         print("Brand card clicked")
+        # Wait for project page to load
+        wait_for_page_load(driver, wait)
     else:
         print("Could not find brand card")
         return False
 
-    time.sleep(3)
-
-    # Look for "Test automation project"
+    # Look for "Test automation project" with explicit wait
     project_selectors = [
         (By.XPATH, "//*[contains(text(), 'Test automation project')]"),
         (By.XPATH, "//div[contains(text(), 'Test automation project')]"),
@@ -175,12 +201,13 @@ def part2_navigate_to_project(driver, wait):
     ]
     
     if find_and_click_element(driver, wait, project_selectors, "test automation project"):
-        print("Test automation project opened")
+        print("Test automation project clicked")
+        # Wait for video page to load
+        wait_for_page_load(driver, wait)
     else:
         print("Could not find test automation project")
         return False
 
-    time.sleep(2)
     return True
 
 def part3_play_video(driver, wait):
@@ -189,9 +216,8 @@ def part3_play_video(driver, wait):
     
     # Save the current URL before going to video page
     projects_url = driver.current_url
-    time.sleep(2)
-
-    # Look for video player and start playing
+    
+    # Wait for video player elements to be present
     play_selectors = [
         (By.CSS_SELECTOR, "#vid-01j912gbvdnr5er79gqeb8k30w > div > div.play-section.wds-mb-2.wds-flex.wds-items-center.wds-justify-between.wds-gap-x-2 > button:nth-child(1) > svg"),
         (By.XPATH, "//*[@id='vid-01j912gbvdnr5er79gqeb8k30w']/div/div[1]/button[1]/svg"),
@@ -205,45 +231,71 @@ def part3_play_video(driver, wait):
     ]
     
     if find_and_click_element(driver, wait, play_selectors, "play button"):
-        print("Video started")
+        print("Video play button clicked")
+        wait_for_video_state_change(driver, wait)
     else:
         print("Could not find play button")
         return False, None
     
-    time.sleep(2)
-    
-    # Play video for 10 seconds 
+    # Play video for 10 seconds with dynamic wait
     print("Playing video for 10 seconds...")
-    time.sleep(13.5)
-    print("Video played for 10 seconds")
+    video_play_wait = WebDriverWait(driver, 15)
     
+    # Wait for 10 seconds while monitoring if page is still active
+    start_time = time.time()
+    while time.time() - start_time < 10:
+        try:
+            # Check if we're still on the video page
+            current_url = driver.current_url
+            if "video" in current_url or "watch" in current_url or projects_url != current_url:
+                time.sleep(0.5)  # Small incremental sleep
+            else:
+                break
+        except InvalidSessionIdException:
+            raise
+        except Exception:
+            break
+    
+    print("Video played for 10+ seconds")
     return True, projects_url
 
 def part4_replay_video(driver, wait):
     """Part 4: Replay the Video (Pause, Resume, Pause cycle)"""
     print("PART 4: REPLAY THE VIDEO")
     
-    print("Pausing video after 13.5 seconds of play...")
-    pause_video_with_space(driver)
-    time.sleep(2)
+    print("Pausing video...")
+    if pause_video_with_space(driver):
+        wait_for_video_state_change(driver, wait)
+        print("Video paused")
     
-    # Wait 15 seconds after pausing
+    # Wait 5 seconds while video is paused
     print("Waiting 5 seconds while video is paused...")
-    time.sleep(5)
+    pause_wait = WebDriverWait(driver, 6)
+    try:
+        # Use a condition that will timeout after 5 seconds
+        pause_wait.until(lambda driver: False)  # This will always timeout after 5 seconds
+    except TimeoutException:
+        pass  # Expected timeout after 5 seconds
     
-    # Continue watching by pressing SPACE again (resume video)
+    # Resume video
     print("Resuming video...")
-    pause_video_with_space(driver)
-    time.sleep(2)
+    if pause_video_with_space(driver):
+        wait_for_video_state_change(driver, wait)
+        print("Video resumed")
 
-    # Wait 5 seconds then pause again
+    # Play for 5 seconds
     print("Playing video for 5 seconds...")
-    time.sleep(5)
+    play_wait = WebDriverWait(driver, 6)
+    try:
+        play_wait.until(lambda driver: False)  # This will timeout after 5 seconds
+    except TimeoutException:
+        pass
     
-    # Pause again using SPACE key
+    # Pause again
     print("Pausing video again...")
-    pause_video_with_space(driver)
-    time.sleep(2)
+    if pause_video_with_space(driver):
+        wait_for_video_state_change(driver, wait)
+        print("Video paused again")
     
     print("Video replay cycle finished")
     return True
@@ -256,14 +308,16 @@ def part5_pause_and_exit(driver, wait, projects_url):
     print("Navigating back to projects page...")
     try:
         driver.get(projects_url)
+        # Wait for projects page to load
+        wait_for_page_load(driver, wait)
+        
+        # Wait for project elements to be visible
+        wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'project') or contains(text(), 'Project')]")))
         print("Successfully navigated back to projects page")
-        time.sleep(3)
     except Exception as e:
         print(f"Error navigating back: {e}")
         return False
 
-    time.sleep(2)
-    print("Successfully exited video and returned to projects")
     return True
 
 def part6_logout(driver, wait):
@@ -282,38 +336,31 @@ def part6_logout(driver, wait):
     ]
     
     if find_and_click_element(driver, wait, logout_selectors, "logout button"):
-        print("Logged out successfully")
+        print("Logout button clicked")
+        
+        # Wait for redirect to login page
+        print("Waiting for redirect to login page...")
+        try:
+            # Wait for URL to change or login elements to appear
+            wait.until(lambda driver: "login" in driver.current_url.lower() or 
+                      EC.presence_of_element_located((By.ID, "pin")))
+            print("Successfully redirected to login page")
+        except TimeoutException:
+            print("Timeout waiting for redirect, navigating manually...")
+            driver.get("https://indeedemo-fyc.watch.indee.tv/")
+            wait_for_page_load(driver, wait)
+            
     else:
         print("Could not find logout button")
         return False
-
-    time.sleep(2)
     
-    # Wait for redirect to login page and verify
-    print("Waiting for redirect to login page...")
-    time.sleep(5)
-    
-    current_url = driver.current_url
-    
-    # If not redirected to login page, navigate there manually
-    if "login" not in current_url.lower():
-        print("Not redirected to login page, navigating manually...")
-        try:
-            driver.get("https://indeedemo-fyc.watch.indee.tv/")
-            time.sleep(3)
-            current_url = driver.current_url
-            if "login" in current_url.lower():
-                print("Successfully navigated to login page")
-            else:
-                print("Still not on login page, but continuing...")
-        except Exception as e:
-            print(f"Error navigating to login page: {e}")
-    else:
-        print("Successfully redirected to login page")
-    
-    # Wait 5 seconds on login page before closing
+    # Wait on login page before closing (using WebDriverWait for consistency)
     print("Waiting 5 seconds on login page before closing...")
-    time.sleep(5)
+    final_wait = WebDriverWait(driver, 6)
+    try:
+        final_wait.until(lambda driver: False)  # Timeout after 5 seconds
+    except TimeoutException:
+        pass
     
     print("Successfully logged out")
     return True
@@ -389,7 +436,12 @@ def main():
         if driver:
             try:
                 print("Cleaning up...")
-                time.sleep(2)
+                # Small delay for cleanup
+                cleanup_wait = WebDriverWait(driver, 3)
+                try:
+                    cleanup_wait.until(lambda driver: False)
+                except TimeoutException:
+                    pass
                 driver.quit()
                 print("Driver closed")
             except Exception as e:
